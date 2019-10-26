@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
@@ -56,7 +57,7 @@ void cpu_exclusive_scan(int* start, int* end, int* output) {
     }
 
 #else    
-    int N = end - start;
+    auto N = end - start;
     output[0] = 0;
     for (int i = 1; i < N; i++) {
         output[i] = output[i-1] + start[i-1];
@@ -123,7 +124,7 @@ int main(int argc, char** argv) {
 
     if (input.compare("random") == 0) {
 
-        srand(time(NULL));
+        srand(static_cast<int>(time(NULL)));
 
         // generate random array
         for (int i = 0; i < N; i++) {

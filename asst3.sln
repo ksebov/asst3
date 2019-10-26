@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.28307.329
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "scan", "scan\scan.vcxproj", "{3A1A4030-E0DC-48D7-B2B1-FAB70E996760}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "saxpy", "saxpy\saxpy.vcxproj", "{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3A1A4030-E0DC-48D7-B2B1-FAB70E996760}.Debug|x64.ActiveCfg = Debug|x64
+		{3A1A4030-E0DC-48D7-B2B1-FAB70E996760}.Debug|x64.Build.0 = Debug|x64
+		{3A1A4030-E0DC-48D7-B2B1-FAB70E996760}.Release|x64.ActiveCfg = Release|x64
+		{3A1A4030-E0DC-48D7-B2B1-FAB70E996760}.Release|x64.Build.0 = Release|x64
+		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Debug|x64.ActiveCfg = Debug|x64
+		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Debug|x64.Build.0 = Debug|x64
+		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Release|x64.ActiveCfg = Release|x64
+		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C79A7E38-F14D-42B2-B7A8-67A27BE4868C}
+	EndGlobalSection
+EndGlobal

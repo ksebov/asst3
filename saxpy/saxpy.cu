@@ -94,7 +94,7 @@ void saxpyCuda(int N, float alpha, float* xarray, float* yarray, float* resultar
 
     
     // end timing after result has been copied back into host memory
-    //double endTime = CycleTimer::currentSeconds();
+    double endTime = CycleTimer::currentSeconds();
 
     cudaError_t errCode = cudaPeekAtLastError();
     if (errCode != cudaSuccess) {
