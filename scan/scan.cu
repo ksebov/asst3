@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <stdio.h>
 
 #include <cuda.h>
@@ -14,7 +15,6 @@
 
 #define THREADS_PER_BLOCK 256
 
-
 // helper function to round an integer up to the next power of 2
 static inline int nextPow2(int n) {
     n--;
@@ -25,6 +25,76 @@ static inline int nextPow2(int n) {
     n |= n >> 16;
     n++;
     return n;
+}
+
+inline static int ceilLog2(int32_t val) {
+  assert(val > 0);
+
+  int n = 0;
+  while (val > (1 << n)) {
+    n++;
+  }
+
+  return n;
+}
+
+void exclusive_scan_iterative(int logN, int* output) {
+  // upsweep phase
+  for (int d = 0; d < logN-2; ++d) {
+    /*parallel*/for (int k = 0; k < (1 << (logN - d - 1)); ++k) {
+      const int ix0 = (k << (d + 1)) + (1 << d) - 1;
+      const int ix1 = ix0 + (1 << d);
+
+      output[ix1] += output[ix0];
+    }
+  }
+
+  // junction phase
+  const int ix0 = (1 << (logN - 2)) - 1;
+  const int ix1 = (1 << (logN - 1)) - 1;
+
+  output[(1<<logN) - 1] = output[ix0] + output[ix1];
+  output[ix1] = 0;
+
+  // downsweep phase
+  for (int d = logN-2; d >= 0; --d) {
+    /*parallel*/for (int k = 0; k < (1 << (logN - d - 1)); ++k) {
+      const int ix0 = (k << (d + 1)) + (1 << d) - 1;
+      const int ix1 = ix0 + (1 << d);
+
+      const int t = output[ix0];
+      output[ix0] = output[ix1];
+      output[ix1] += t;
+    }
+  }
+}
+
+__global__ void upsweep_kernel(int d, int* output) {
+  const int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+  const int ix0 = (k << (d + 1)) + (1 << d) - 1;
+  const int ix1 = ix0 + (1 << d);
+
+  output[ix1] += output[ix0];
+}
+
+__global__ void junction_kernel(int* output, int logN) {
+  const int ix0 = (1 << (logN - 2)) - 1;
+  const int ix1 = (1 << (logN - 1)) - 1;
+
+  output[(1 << logN) - 1] = output[ix0] + output[ix1];
+  output[ix1] = 0;
+}
+
+__global__ void downsweep_kernel(int d, int* output) {
+  const int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+  const int ix0 = (k << (d + 1)) + (1 << d) - 1;
+  const int ix1 = ix0 + (1 << d);
+
+  const int t = output[ix0];
+  output[ix0] = output[ix1];
+  output[ix1] += t;
 }
 
 // exclusive_scan --
@@ -42,21 +112,23 @@ static inline int nextPow2(int n) {
 // Also, as per the comments in cudaScan(), you can implement an
 // "in-place" scan, since the timing harness makes a copy of input and
 // places it in result
-void exclusive_scan(int* input, int N, int* result)
-{
+static void exclusive_scan(int logN, int* output) {
+  for (int d = 0; d < logN - 2; ++d) {
+    const int threads = 1 << (logN - d - 1);
+    const int threadsPerBlock = std::min(threads, THREADS_PER_BLOCK);
 
-    // CS149 TODO:
-    //
-    // Implement your exclusive scan implementation here.  Keep input
-    // mind that although the arguments to this function are device
-    // allocated arrays, this is a function that is running in a thread
-    // on the CPU.  Your implementation will need to make multiple calls
-    // to CUDA kernel functions (that you must write) to implement the
-    // scan.
+    upsweep_kernel<<< threads/threadsPerBlock, threadsPerBlock >>> (d, output);
+  }
 
+  junction_kernel <<< 1,1 >>> (output, logN);
 
+  for (int d = logN - 2; d >= 0; --d) {
+    const int threads = 1 << (logN - d - 1);
+    const int threadsPerBlock = std::min(threads, THREADS_PER_BLOCK);
+
+    downsweep_kernel << < threads / threadsPerBlock, threadsPerBlock >> > (d, output);
+  }
 }
-
 
 //
 // cudaScan --
@@ -67,9 +139,21 @@ void exclusive_scan(int* input, int N, int* result)
 // above. Students should not modify it.
 double cudaScan(int* inarray, int* end, int* resultarray)
 {
+    const int N = end - inarray;
+    const int logN = ceilLog2(N);
+# if 0
+    {
+      assert(N == (1 << logN));
+      memmove(resultarray, inarray, N * sizeof(int));
+
+      const double startTime = CycleTimer::currentSeconds();
+      exclusive_scan_iterative(logN, resultarray);
+      const double endTime = CycleTimer::currentSeconds();
+
+      return endTime - startTime;
+    }
+#endif
     int* device_result;
-    int* device_input;
-    int N = end - inarray;  
 
     // This code rounds the arrays provided to exclusive_scan up
     // to a power of 2, but elements after the end of the original
@@ -80,28 +164,24 @@ double cudaScan(int* inarray, int* end, int* resultarray)
     // result in extra work on non-power-of-2 inputs, but it's worth
     // the simplicity of a power of two only solution.
 
-    int rounded_length = nextPow2(end - inarray);
-    
-    cudaMalloc((void **)&device_result, sizeof(int) * rounded_length);
-    cudaMalloc((void **)&device_input, sizeof(int) * rounded_length);
+    cudaMalloc((void **)&device_result, sizeof(int) << logN);
 
     // For convenience, both the input and output vectors on the
     // device are initialized to the input values. This means that
     // students are free to implement an in-place scan on the result
     // vector if desired.  If you do this, you will need to keep this
     // in mind when calling exclusive_scan from find_repeats.
-    cudaMemcpy(device_input, inarray, (end - inarray) * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(device_result, inarray, (end - inarray) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_result, inarray, N * sizeof(int), cudaMemcpyHostToDevice);
 
     double startTime = CycleTimer::currentSeconds();
 
-    exclusive_scan(device_input, N, device_result);
+    exclusive_scan(logN, device_result);
 
     // Wait for completion
     cudaDeviceSynchronize();
     double endTime = CycleTimer::currentSeconds();
        
-    cudaMemcpy(resultarray, device_result, (end - inarray) * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(resultarray, device_result, N * sizeof(int), cudaMemcpyDeviceToHost);
 
     double overallDuration = endTime - startTime;
     return overallDuration; 
