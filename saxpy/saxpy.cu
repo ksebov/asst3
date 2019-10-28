@@ -1,16 +1,11 @@
 #include <stdio.h>
+#include <memory>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <driver_functions.h>
 
 #include "CycleTimer.h"
-
-
-// return GB/sec
-float GBPerSec(int bytes, float sec) {
-  return static_cast<float>(bytes) / (1024. * 1024. * 1024.) / sec;
-}
 
 
 // This is the CUDA "kernel" function that is run on the GPU.  You
@@ -38,11 +33,26 @@ saxpy_kernel(int N, float alpha, float* x, float* y, float* result) {
 // memory on the GPU using CUDA API functions, uses CUDA API functions
 // to transfer data from the CPU's memory address space to GPU memory
 // address space, and launches the CUDA kernel function on the GPU.
+template <typename T>
+class auto_cuda_ptr : public std::unique_ptr<float, decltype(&cudaFree)> {
+public:
+  auto_cuda_ptr() : unique_ptr(nullptr, &cudaFree) {}
+
+  explicit auto_cuda_ptr(int N)
+  : unique_ptr(nullptr, &cudaFree) {
+    T* p; cudaMalloc(&p, N * sizeof(T));
+    reset(p);
+  }
+};
+
+
 void saxpyCuda(int N, float alpha, float* xarray, float* yarray, float* resultarray) {
 
     // must read both input arrays (xarray and yarray) and write to
     // output array (resultarray)
-    int totalBytes = sizeof(float) * 3 * N;
+    const auto GBPerSec = [=](float sec) {
+      return static_cast<float>(N / (1024. * 1024. * 1024.) / sec * sizeof(float) * 3);
+    };
 
     // compute number of blocks and threads per block.  In this
     // application we've hardcoded thread blocks to contain 512 CUDA
@@ -62,39 +72,28 @@ void saxpyCuda(int N, float alpha, float* xarray, float* yarray, float* resultar
     // above) but you cannot access the contents these buffers from
     // this thread. CPU threads cannot issue loads and stores from GPU
     // memory!
-    float* device_x;
-    float* device_y;
-    float* device_result;
 
-    //
-    // CS149 TODO: allocate device memory buffers on the GPU using cudaMalloc.
-    //
-    // We highly recommend taking a look at NVIDIA's
-    // tutorial, which clearly walks you through the few lines of code
-    // you need to write for this part of the assignment:
-    //
-    // https://devblogs.nvidia.com/easy-introduction-cuda-c-and-c/
-    //
-        
-    // start timing after allocation of device memory
-    double startTime = CycleTimer::currentSeconds();
+    auto_cuda_ptr<float> device_x{N};
+    auto_cuda_ptr<float> device_y{N};
+    auto_cuda_ptr<float> device_result{N};
 
-    //
-    // CS149 TODO: copy input arrays to the GPU using cudaMemcpy
-    //
+    const double overallStart = CycleTimer::currentSeconds();
 
-   
+    cudaMemcpy(device_x.get(), xarray, N * sizeof(xarray[0]), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_y.get(), yarray, N * sizeof(yarray[0]), cudaMemcpyHostToDevice);
+    cudaDeviceSynchronize();
+
     // run CUDA kernel. (notice the <<< >>> brackets indicating a CUDA
     // kernel launch) Execution on the GPU occurs here.
-    saxpy_kernel<<<blocks, threadsPerBlock>>>(N, alpha, device_x, device_y, device_result);
+    const double kernelStart = CycleTimer::currentSeconds();
+    saxpy_kernel<<<blocks, threadsPerBlock>>>(N, alpha, device_x.get(), device_y.get(), device_result.get());
+    cudaDeviceSynchronize();
+    const auto kernelEnd = CycleTimer::currentSeconds();
 
-    //
-    // CS149 TODO: copy result from GPU back to CPU using cudaMemcpy
-    //
+    cudaMemcpy(resultarray, device_result.get(),  N * sizeof(resultarray[0]), cudaMemcpyDeviceToHost);
 
-    
     // end timing after result has been copied back into host memory
-    double endTime = CycleTimer::currentSeconds();
+    const double overallEnd = CycleTimer::currentSeconds();
 
     cudaError_t errCode = cudaPeekAtLastError();
     if (errCode != cudaSuccess) {
@@ -102,13 +101,14 @@ void saxpyCuda(int N, float alpha, float* xarray, float* yarray, float* resultar
 		errCode, cudaGetErrorString(errCode));
     }
 
-    double overallDuration = endTime - startTime;
-    printf("Effective BW by CUDA saxpy: %.3f ms\t\t[%.3f GB/s]\n", 1000.f * overallDuration, GBPerSec(totalBytes, overallDuration));
+    const double overallDuration = overallEnd - overallStart;
+    const double kernelDuration = kernelEnd - kernelStart;
 
-    //
-    // CS149 TODO: free memory buffers on the GPU using cudaFree
-    //
-    
+    printf("Effective BW by CUDA saxpy kernel: %.3f ms\t total: %.3f ms\t[%.3f GB/s]\n",
+      1000.f * kernelDuration,
+      1000.f * overallDuration,
+      GBPerSec(overallDuration - kernelDuration));
+
 }
 
 void printCudaInfo() {
