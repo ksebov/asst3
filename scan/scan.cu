@@ -15,18 +15,6 @@
 
 #define THREADS_PER_BLOCK 256
 
-// helper function to round an integer up to the next power of 2
-static inline int nextPow2(int n) {
-    n--;
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-    n++;
-    return n;
-}
-
 inline static int ceilLog2(int32_t val) {
   assert(val > 0);
 
@@ -126,7 +114,7 @@ static void exclusive_scan(int logN, int* output) {
     const int threads = 1 << (logN - d - 1);
     const int threadsPerBlock = std::min(threads, THREADS_PER_BLOCK);
 
-    downsweep_kernel << < threads / threadsPerBlock, threadsPerBlock >> > (d, output);
+    downsweep_kernel <<< threads / threadsPerBlock, threadsPerBlock >>> (d, output);
   }
 }
 
@@ -220,6 +208,56 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
     return overallDuration; 
 }
 
+__global__ void equal_indices(const int* input, int* idx) {
+  const int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+  idx[k] = input[k + 1] == input[k] ? 1 : 0;
+//  printf("input[%i] = %i  idx[%i] = %i\n", k, input[k], k, idx[k]);
+}
+
+__global__ void equal_indices_ex(const int* input, int offset, int* idx) {
+  const int k = offset  + blockIdx.x * blockDim.x + threadIdx.x;
+
+  idx[k] = input[k + 1] == input[k] ? 1 : 0;
+//  printf("input[%i] = %i  idx[%i] = %i\n", k, input[k], k, idx[k]);
+}
+
+static void mark_repeats(const int* input, int length, int* idx) {
+  const int N = length - 1; // Last index must not be tested
+  if (N >= THREADS_PER_BLOCK) {
+    equal_indices << <N / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (input, idx);
+  }
+
+  const int processed = N / THREADS_PER_BLOCK * THREADS_PER_BLOCK;
+  if (N > processed) {
+    equal_indices_ex <<<1, N - processed >>> (input, processed, idx);
+  }
+}
+
+__global__ void collect_kernel(const int* idx_sums, int offset, int* result) {
+  const int k = offset+blockIdx.x * blockDim.x + threadIdx.x;
+
+//  printf("idx_sums[%i] = %i\n", k, idx_sums[k]);
+
+  int idx = idx_sums[k];
+  if (idx_sums[k] != idx_sums[k+1]) {
+    result[idx] = k;
+
+//    printf("result[%i] = %i\n", idx, result[idx]);
+  }
+}
+
+static void collect_indices(const int* idx_sums, int length, int* result) {
+  const int N = length - 1; // Last index is used for result
+  if (N >= THREADS_PER_BLOCK) {
+    collect_kernel <<<N / THREADS_PER_BLOCK, THREADS_PER_BLOCK >>> (idx_sums, 0, result);
+  }
+
+  const int processed = N / THREADS_PER_BLOCK * THREADS_PER_BLOCK;
+  if (N > processed) {
+    collect_kernel <<<1, N - processed >>> (idx_sums, processed, result);
+  }
+}
 
 // find_repeats --
 //
@@ -227,21 +265,16 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
 // indices `i` for which `device_input[i] == device_input[i+1]`.
 //
 // Returns the total number of pairs found
-int find_repeats(int* device_input, int length, int* device_output) {
+int find_repeats(int* input, int length, int logN, int* scratch) {
+  mark_repeats(input, length, scratch);
+  exclusive_scan(logN, scratch);
 
-    // CS149 TODO:
-    //
-    // Implement this function. You will probably want to
-    // make use of one or more calls to exclusive_scan(), as well as
-    // additional CUDA kernel launches.
-    //    
-    // Note: As in the scan code, the calling code ensures that
-    // allocated arrays are a power of 2 in size, so you can use your
-    // exclusive_scan function with them. However, your implementation
-    // must ensure that the results of find_repeats are correct given
-    // the actual array length.
+  int repeats;
+  cudaMemcpy(&repeats, scratch+length-1, sizeof(repeats), cudaMemcpyDeviceToHost);
 
-    return 0; 
+  collect_indices(scratch, length, input);
+
+  return repeats;
 }
 
 
@@ -251,28 +284,26 @@ int find_repeats(int* device_input, int length, int* device_output) {
 // Timing wrapper around find_repeats. You should not modify this function.
 double cudaFindRepeats(int *input, int length, int *output, int *output_length) {
 
-    int *device_input;
-    int *device_output;
-    int rounded_length = nextPow2(length);
-    
-    cudaMalloc((void **)&device_input, rounded_length * sizeof(int));
-    cudaMalloc((void **)&device_output, rounded_length * sizeof(int));
-    cudaMemcpy(device_input, input, length * sizeof(int), cudaMemcpyHostToDevice);
+    const int logN = ceilLog2(length);
+
+    int* data;    cudaMalloc(&data, length* sizeof(int));
+    int* scratch; cudaMalloc(&scratch, sizeof(int) << logN);
+    cudaMemcpy(data, input, length * sizeof(int), cudaMemcpyHostToDevice);
 
     cudaDeviceSynchronize();
     double startTime = CycleTimer::currentSeconds();
-    
-    int result = find_repeats(device_input, length, device_output);
+
+    const int repeats = find_repeats(data, length, logN, scratch);
 
     cudaDeviceSynchronize();
     double endTime = CycleTimer::currentSeconds();
 
     // set output count and results array
-    *output_length = result;
-    cudaMemcpy(output, device_output, length * sizeof(int), cudaMemcpyDeviceToHost);
+    *output_length = repeats;
+    cudaMemcpy(output, data, repeats * sizeof(int), cudaMemcpyDeviceToHost);
 
-    cudaFree(device_input);
-    cudaFree(device_output);
+    cudaFree(data);
+    cudaFree(scratch);
 
     float duration = endTime - startTime; 
     return duration;
