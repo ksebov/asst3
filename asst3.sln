@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "scan", "scan\scan.vcxproj",
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "saxpy", "saxpy\saxpy.vcxproj", "{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "render", "render\render.vcxproj", "{F4F0879F-5C38-4FB2-8121-93B72E318C39}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,6 +23,10 @@ Global
 		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Debug|x64.Build.0 = Debug|x64
 		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Release|x64.ActiveCfg = Release|x64
 		{AF6C84F2-5892-49CA-AF5A-E6513B8CF478}.Release|x64.Build.0 = Release|x64
+		{F4F0879F-5C38-4FB2-8121-93B72E318C39}.Debug|x64.ActiveCfg = Debug|x64
+		{F4F0879F-5C38-4FB2-8121-93B72E318C39}.Debug|x64.Build.0 = Debug|x64
+		{F4F0879F-5C38-4FB2-8121-93B72E318C39}.Release|x64.ActiveCfg = Release|x64
+		{F4F0879F-5C38-4FB2-8121-93B72E318C39}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
