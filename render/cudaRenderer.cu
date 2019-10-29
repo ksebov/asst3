@@ -15,6 +15,8 @@
 #include "sceneLoader.h"
 #include "util.h"
 
+#define BLOCKSIZE  512
+
 ////////////////////////////////////////////////////////////////////////////////////////
 // Putting all the cuda kernels here
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -521,16 +523,22 @@ CudaRenderer::setup() {
     // See the CUDA Programmer's Guide for descriptions of
     // cudaMalloc and cudaMemcpy
 
-    cudaMalloc(&cudaDevicePosition, sizeof(float) * 3 * numCircles);
-    cudaMalloc(&cudaDeviceVelocity, sizeof(float) * 3 * numCircles);
-    cudaMalloc(&cudaDeviceColor, sizeof(float) * 3 * numCircles);
-    cudaMalloc(&cudaDeviceRadius, sizeof(float) * numCircles);
+    const int numCirclesAlloced = numCircles + BLOCKSIZE; // Make sure there's a safety buffer for circle loop to overshoot.
+    cudaMalloc(&cudaDevicePosition, sizeof(float) * 3 * numCirclesAlloced);
+    cudaMalloc(&cudaDeviceVelocity, sizeof(float) * 3 * numCirclesAlloced);
+    cudaMalloc(&cudaDeviceColor, sizeof(float) * 3 * numCirclesAlloced);
+    cudaMalloc(&cudaDeviceRadius, sizeof(float) * numCirclesAlloced);
     cudaMalloc(&cudaDeviceImageData, sizeof(float) * 4 * image->width * image->height);
 
     cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceColor, color, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceRadius, radius, sizeof(float) * numCircles, cudaMemcpyHostToDevice);
+
+    // Clear the overshoot zones to prevent any stray drawing
+    cudaMemset(cudaDevicePosition + 3*numCircles, 0, 3*sizeof(cudaDeviceRadius[0])*(numCirclesAlloced - numCircles));
+    cudaMemset(cudaDeviceVelocity + 3*numCircles, 0, 3*sizeof(cudaDeviceRadius[0])*(numCirclesAlloced - numCircles));
+    cudaMemset(cudaDeviceRadius   + 1*numCircles, 0, 1*sizeof(cudaDeviceRadius[0])*(numCirclesAlloced - numCircles));
 
     // Initialize parameters in constant memory.  We didn't talk about
     // constant memory in class, but the use of read-only constant
@@ -634,23 +642,62 @@ CudaRenderer::advanceAnimation() {
     cudaDeviceSynchronize();
 }
 
+#define SCAN_BLOCK_DIM   BLOCKSIZE  // needed by sharedMemExclusiveScan implementation
+#include "exclusiveScan.cu_inl"
+
+__shared__ uint intersecting[BLOCKSIZE];
+__shared__ uint intInd[BLOCKSIZE];
+__shared__ uint toRender[BLOCKSIZE];
+__shared__ uint prefixSumScratch[2 * BLOCKSIZE];
+
+#include "circleBoxTest.cu_inl"
+
 __global__ void kernelRenderPixels() {
+  const float boxL = float((blockIdx.x + 0) * blockDim.x) / cuConstRendererParams.imageWidth;
+  const float boxB = float((blockIdx.y + 0) * blockDim.y) / cuConstRendererParams.imageHeight;
+  const float boxR = float((blockIdx.x + 1) * blockDim.x) / cuConstRendererParams.imageWidth;
+  const float boxT = float((blockIdx.y + 1) * blockDim.y) / cuConstRendererParams.imageHeight;
+
+  const int linearIndex = threadIdx.y * blockDim.x + threadIdx.x;
 
   const int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
   const int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
-
-//  printf("%i %i\n", pixelX, pixelY);
 
   float4 * imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * cuConstRendererParams.imageWidth + pixelX)]);
   const float2 pixelCenterNorm = make_float2(
     (pixelX + 0.5f) / cuConstRendererParams.imageWidth,
     (pixelY + 0.5f) / cuConstRendererParams.imageHeight);
 
-  for (int index = 0; index < cuConstRendererParams.numCircles; index++) {
-    const int index3 = 3 * index;
+  // Note: because of sharedMemExclusiveScan, last circle in the step is always ignored
+  // That's why we advance by one step size less 1.
+  for (int step = 0; step < cuConstRendererParams.numCircles; step+=(BLOCKSIZE-1)) {
+    {
+      const int circleIndex = step + linearIndex;
+      const float* circleXYZ = &cuConstRendererParams.position[circleIndex * 3];
+      const float rad = cuConstRendererParams.radius[circleIndex];
+      intersecting[linearIndex] =
+        circleInBox(circleXYZ[0], circleXYZ[1], rad, boxL, boxR, boxT, boxB);
+    } __syncthreads();
 
-    const float3 p = *(float3*)(&cuConstRendererParams.position[index3]);
-    shadePixel(index, pixelCenterNorm, p, imgPtr);
+    {
+      sharedMemExclusiveScan(linearIndex, intersecting, intInd, prefixSumScratch, BLOCKSIZE);
+    } __syncthreads();
+
+    const int cRendered = intInd[BLOCKSIZE-1];
+    {
+      int idx = intInd[linearIndex];
+      if (idx != intInd[linearIndex + 1]) {
+        toRender[idx] = linearIndex;
+      }
+    } __syncthreads();
+
+    {
+      for (int circle = 0; circle < cRendered; ++circle) {
+        const int index = step + toRender[circle];
+        const float3 p = *(float3*)(&cuConstRendererParams.position[index * 3]);
+        shadePixel(index, pixelCenterNorm, p, imgPtr);
+      }
+    } __syncthreads();
   }
 }
 
@@ -658,15 +705,15 @@ void
 CudaRenderer::render() {
 
 #if 1
-  // 256 threads per block is a healthy number
-  dim3 blockDim(16, 16);
+  constexpr int blockWidth = 32; assert(BLOCKSIZE % blockWidth == 0);
+  dim3 blockDim(blockWidth, BLOCKSIZE/ blockWidth);
   assert(image && image->width % blockDim.x == 0 && image->height % blockDim.y == 0);
   dim3 gridDim(image->width / blockDim.x, image->height / blockDim.y);
 
   kernelRenderPixels <<<gridDim, blockDim>>> ();
 #else
   // 256 threads per block is a healthy number
-  dim3 blockDim(256, 1);
+  dim3 blockDim(BLOCKSIZE, 1);
   dim3 gridDim((numCircles + blockDim.x - 1) / blockDim.x);
 
   kernelRenderCircles << <gridDim, blockDim >> > ();
