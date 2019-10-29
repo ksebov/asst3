@@ -321,7 +321,8 @@ __global__ void kernelAdvanceSnowflake() {
 // pixel from the circle.  Update of the image is done in this
 // function.  Called by kernelRenderCircles()
 __device__ __inline__ void
-shadePixel(int circleIndex, float2 pixelCenter, float3 p, float4* imagePtr) {
+shadePixel(int circleIndex, const float2 pixelCenter, float4* imagePtr) {
+    const float3 p = *(float3*)(&cuConstRendererParams.position[circleIndex * 3]);
 
     float diffX = p.x - pixelCenter.x;
     float diffY = p.y - pixelCenter.y;
@@ -424,7 +425,7 @@ __global__ void kernelRenderCircles() {
         for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
             float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
                                                  invHeight * (static_cast<float>(pixelY) + 0.5f));
-            shadePixel(index, pixelCenterNorm, p, imgPtr);
+            shadePixel(index, pixelCenterNorm, imgPtr);
             imgPtr++;
         }
     }
@@ -694,8 +695,7 @@ __global__ void kernelRenderPixels() {
     {
       for (int circle = 0; circle < cRendered; ++circle) {
         const int index = step + toRender[circle];
-        const float3 p = *(float3*)(&cuConstRendererParams.position[index * 3]);
-        shadePixel(index, pixelCenterNorm, p, imgPtr);
+        shadePixel(index, pixelCenterNorm, imgPtr);
       }
     } __syncthreads();
   }
