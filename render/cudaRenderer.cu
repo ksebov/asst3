@@ -1,5 +1,6 @@
 #include <string>
 #include <algorithm>
+#include <cassert>
 #include <math.h>
 #include <stdio.h>
 #include <vector>
@@ -633,13 +634,42 @@ CudaRenderer::advanceAnimation() {
     cudaDeviceSynchronize();
 }
 
+__global__ void kernelRenderPixels() {
+
+  const int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
+  const int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
+
+//  printf("%i %i\n", pixelX, pixelY);
+
+  float4 * imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * cuConstRendererParams.imageWidth + pixelX)]);
+  const float2 pixelCenterNorm = make_float2(
+    (pixelX + 0.5f) / cuConstRendererParams.imageWidth,
+    (pixelY + 0.5f) / cuConstRendererParams.imageHeight);
+
+  for (int index = 0; index < cuConstRendererParams.numCircles; index++) {
+    const int index3 = 3 * index;
+
+    const float3 p = *(float3*)(&cuConstRendererParams.position[index3]);
+    shadePixel(index, pixelCenterNorm, p, imgPtr);
+  }
+}
+
 void
 CudaRenderer::render() {
 
-    // 256 threads per block is a healthy number
-    dim3 blockDim(256, 1);
-    dim3 gridDim((numCircles + blockDim.x - 1) / blockDim.x);
+#if 1
+  // 256 threads per block is a healthy number
+  dim3 blockDim(16, 16);
+  assert(image && image->width % blockDim.x == 0 && image->height % blockDim.y == 0);
+  dim3 gridDim(image->width / blockDim.x, image->height / blockDim.y);
 
-    kernelRenderCircles<<<gridDim, blockDim>>>();
-    cudaDeviceSynchronize();
+  kernelRenderPixels <<<gridDim, blockDim>>> ();
+#else
+  // 256 threads per block is a healthy number
+  dim3 blockDim(256, 1);
+  dim3 gridDim((numCircles + blockDim.x - 1) / blockDim.x);
+
+  kernelRenderCircles << <gridDim, blockDim >> > ();
+#endif
+  cudaDeviceSynchronize();
 }
