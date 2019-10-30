@@ -33,6 +33,9 @@ struct GlobalConstants {
     int imageWidth;
     int imageHeight;
     float* imageData;
+
+    float invWidth;
+    float invHeight;
 };
 
 // Global variable that is in scope, but read-only, for all cuda
@@ -549,6 +552,8 @@ CudaRenderer::setup() {
     params.numCircles = numCircles;
     params.imageWidth = image->width;
     params.imageHeight = image->height;
+    params.invWidth = 1.f / image->width;
+    params.invHeight = 1.f / image->height;
     params.circles = cudaCircles;
     params.velocity = cudaDeviceVelocity;
     params.imageData = cudaDeviceImageData;
@@ -648,10 +653,15 @@ __shared__ uint prefixSumScratch[2 * BLOCKSIZE];
 
 template <typename TShader>
 __global__ void kernelRenderPixels() {
-  const float boxL = float((blockIdx.x + 0) * blockDim.x) / cuConstRendererParams.imageWidth;
-  const float boxB = float((blockIdx.y + 0) * blockDim.y) / cuConstRendererParams.imageHeight;
-  const float boxR = float((blockIdx.x + 1) * blockDim.x) / cuConstRendererParams.imageWidth;
-  const float boxT = float((blockIdx.y + 1) * blockDim.y) / cuConstRendererParams.imageHeight;
+  const float blockWidthNorm = blockDim.x * cuConstRendererParams.invWidth;
+
+  const float boxL = blockIdx.x * blockWidthNorm;
+  const float boxR = boxL + blockWidthNorm;
+
+  const float blockHeightNorm = blockDim.y * cuConstRendererParams.invHeight;
+
+  const float boxB = blockIdx.y * blockHeightNorm;
+  const float boxT = boxB + blockHeightNorm;
 
   const int linearIndex = threadIdx.y * blockDim.x + threadIdx.x;
 
@@ -662,8 +672,8 @@ __global__ void kernelRenderPixels() {
   float4 cachePixel = *imagePixel;
 
   const float2 pixelCenterNorm = make_float2(
-    (pixelX + 0.5f) / cuConstRendererParams.imageWidth,
-    (pixelY + 0.5f) / cuConstRendererParams.imageHeight);
+    (pixelX + 0.5f) * cuConstRendererParams.invWidth,
+    (pixelY + 0.5f) * cuConstRendererParams.invHeight);
 
   // Note: because of sharedMemExclusiveScan, last circle in the step is always ignored
   // That's why we advance by one step size less 1.
