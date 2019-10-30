@@ -668,12 +668,12 @@ __global__ void kernelRenderPixels() {
   const int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
   const int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
 
-  float4* imagePixel = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * cuConstRendererParams.imageWidth + pixelX)]);
-  float4 cachePixel = *imagePixel;
-
   const float2 pixelCenterNorm = make_float2(
     (pixelX + 0.5f) * cuConstRendererParams.invWidth,
     (pixelY + 0.5f) * cuConstRendererParams.invHeight);
+
+  float4* imagePixel = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * cuConstRendererParams.imageWidth + pixelX)]);
+  float4 cachePixel = *imagePixel;
 
   // Note: because of sharedMemExclusiveScan, last circle in the step is always ignored
   // That's why we advance by one step size less 1.
