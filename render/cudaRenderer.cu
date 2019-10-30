@@ -15,7 +15,7 @@
 #include "sceneLoader.h"
 #include "util.h"
 
-#define BLOCKSIZE  512
+#define BLOCKSIZE  1024
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Putting all the cuda kernels here
@@ -645,9 +645,8 @@ CudaRenderer::advanceAnimation() {
 #define SCAN_BLOCK_DIM   BLOCKSIZE  // needed by sharedMemExclusiveScan implementation
 #include "exclusiveScan.cu_inl"
 
-__shared__ uint intersecting[BLOCKSIZE];
-__shared__ uint intInd[BLOCKSIZE];
 __shared__ uint toRender[BLOCKSIZE];
+__shared__ uint intInd[BLOCKSIZE];
 __shared__ uint prefixSumScratch[2 * BLOCKSIZE];
 
 #include "circleBoxTest.cu_inl"
@@ -675,12 +674,12 @@ __global__ void kernelRenderPixels() {
     {
       const CudaRenderer::Circle& circle = cuConstRendererParams.circles[step + linearIndex];
 
-      intersecting[linearIndex] =
+      toRender[linearIndex] =
         circleInBox(circle.position[0], circle.position[1], circle.radius, boxL, boxR, boxT, boxB);
     } __syncthreads();
 
     {
-      sharedMemExclusiveScan(linearIndex, intersecting, intInd, prefixSumScratch, BLOCKSIZE);
+      sharedMemExclusiveScan(linearIndex, toRender, intInd, prefixSumScratch, BLOCKSIZE);
     } __syncthreads();
 
     const int cRendered = intInd[BLOCKSIZE-1];
