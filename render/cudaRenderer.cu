@@ -376,15 +376,9 @@ struct SimpleCircleShader {
 
     const float3 rgb = *(float3*)cuConstRendererParams.circles[circleIndex].color;
 
-    float4 existingColor = *imagePtr;
-    float4 newColor;
-    newColor.x = (rgb.x + existingColor.x)*.5f;
-    newColor.y = (rgb.y + existingColor.y)*.5f;
-    newColor.z = (rgb.z + existingColor.z)*.5f;
-    newColor.w = .5f + existingColor.w;
-
-    // global memory write
-    *imagePtr = newColor;
+    imagePtr->x = (imagePtr->x + rgb.x)*.5f;
+    imagePtr->y = (imagePtr->y + rgb.y)*.5f;
+    imagePtr->z = (imagePtr->z + rgb.z)*.5f;
   }
 };
 
@@ -645,8 +639,9 @@ CudaRenderer::advanceAnimation() {
 #define SCAN_BLOCK_DIM   BLOCKSIZE  // needed by sharedMemExclusiveScan implementation
 #include "exclusiveScan.cu_inl"
 
-__shared__ uint toRender[BLOCKSIZE];
+__shared__ uint intersecting[BLOCKSIZE];
 __shared__ uint intInd[BLOCKSIZE];
+__shared__ uint toRender[BLOCKSIZE];
 __shared__ uint prefixSumScratch[2 * BLOCKSIZE];
 
 #include "circleBoxTest.cu_inl"
@@ -663,7 +658,9 @@ __global__ void kernelRenderPixels() {
   const int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
   const int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
 
-  float4 * imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * cuConstRendererParams.imageWidth + pixelX)]);
+  float4* imagePixel = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * cuConstRendererParams.imageWidth + pixelX)]);
+  float4 cachePixel = *imagePixel;
+
   const float2 pixelCenterNorm = make_float2(
     (pixelX + 0.5f) / cuConstRendererParams.imageWidth,
     (pixelY + 0.5f) / cuConstRendererParams.imageHeight);
@@ -674,12 +671,12 @@ __global__ void kernelRenderPixels() {
     {
       const CudaRenderer::Circle& circle = cuConstRendererParams.circles[step + linearIndex];
 
-      toRender[linearIndex] =
+      intersecting[linearIndex] =
         circleInBox(circle.position[0], circle.position[1], circle.radius, boxL, boxR, boxT, boxB);
     } __syncthreads();
 
     {
-      sharedMemExclusiveScan(linearIndex, toRender, intInd, prefixSumScratch, BLOCKSIZE);
+      sharedMemExclusiveScan(linearIndex, intersecting, intInd, prefixSumScratch, BLOCKSIZE);
     } __syncthreads();
 
     const int cRendered = intInd[BLOCKSIZE-1];
@@ -698,10 +695,12 @@ __global__ void kernelRenderPixels() {
     {
       for (int circle = 0; circle < cRendered; ++circle) {
         const int index = step + toRender[circle];
-        TShader::shadePixel(index, pixelCenterNorm, imgPtr);
+        TShader::shadePixel(index, pixelCenterNorm, &cachePixel);
       }
-    } __syncthreads();
+    }
   }
+
+  *imagePixel = cachePixel;
 }
 
 void
