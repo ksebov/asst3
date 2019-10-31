@@ -26,10 +26,9 @@ struct GlobalConstants {
     SceneName sceneName;
 
     int numCircles;
-    float* position;
+    CudaRenderer::Circle* circles;
+
     float* velocity;
-    float* color;
-    float* radius;
 
     int imageWidth;
     int imageHeight;
@@ -116,9 +115,9 @@ __global__ void kernelAdvanceFireWorks() {
     const float pi = 3.14159;
     const float maxDist = 0.25f;
 
+    CudaRenderer::Circle* circle = cuConstRendererParams.circles;
+
     float* velocity = cuConstRendererParams.velocity;
-    float* position = cuConstRendererParams.position;
-    float* radius = cuConstRendererParams.radius;
 
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= cuConstRendererParams.numCircles)
@@ -132,20 +131,19 @@ __global__ void kernelAdvanceFireWorks() {
     int fIdx = (index - NUM_FIREWORKS) / NUM_SPARKS;
     int sfIdx = (index - NUM_FIREWORKS) % NUM_SPARKS;
 
-    int index3i = 3 * fIdx;
     int sIdx = NUM_FIREWORKS + fIdx * NUM_SPARKS + sfIdx;
-    int index3j = 3 * sIdx;
+    int sIdx3 = 3 * sIdx;
 
-    float cx = position[index3i];
-    float cy = position[index3i+1];
+    float cx = circle[fIdx].position[0];
+    float cy = circle[fIdx].position[1];
 
     // update position
-    position[index3j] += velocity[index3j] * dt;
-    position[index3j+1] += velocity[index3j+1] * dt;
+    circle[sIdx].position[0] += velocity[sIdx3+0] * dt;
+    circle[sIdx].position[1] += velocity[sIdx3+1] * dt;
 
     // fire-work sparks
-    float sx = position[index3j];
-    float sy = position[index3j+1];
+    float sx = circle[sIdx].position[0];
+    float sy = circle[sIdx].position[1];
 
     // compute vector from firework-spark
     float cxsx = sx - cx;
@@ -158,17 +156,17 @@ __global__ void kernelAdvanceFireWorks() {
         float angle = (sfIdx * 2 * pi)/NUM_SPARKS;
         float sinA = sin(angle);
         float cosA = cos(angle);
-        float x = cosA * radius[fIdx];
-        float y = sinA * radius[fIdx];
+        float x = cosA * circle[fIdx].radius;
+        float y = sinA * circle[fIdx].radius;
 
-        position[index3j] = position[index3i] + x;
-        position[index3j+1] = position[index3i+1] + y;
-        position[index3j+2] = 0.0f;
+        circle[sIdx].position[0] = circle[fIdx].position[0] + x;
+        circle[sIdx].position[1] = circle[fIdx].position[1] + y;
+        circle[sIdx].position[2] = 0.0f;
 
         // travel scaled unit length 
-        velocity[index3j] = cosA/5.0;
-        velocity[index3j+1] = sinA/5.0;
-        velocity[index3j+2] = 0.0f;
+        velocity[sIdx3 +0] = cosA/5.0;
+        velocity[sIdx3 +1] = sinA/5.0;
+        velocity[sIdx3 +2] = 0.0f;
     }
 }
 
@@ -180,14 +178,14 @@ __global__ void kernelAdvanceHypnosis() {
     if (index >= cuConstRendererParams.numCircles) 
         return; 
 
-    float* radius = cuConstRendererParams.radius; 
+    float& radius = cuConstRendererParams.circles[index].radius;
 
     float cutOff = 0.5f;
     // place circle back in center after reaching threshold radisus 
-    if (radius[index] > cutOff) { 
-        radius[index] = 0.02f; 
+    if (radius > cutOff) { 
+        radius = 0.02f; 
     } else { 
-        radius[index] += 0.01f; 
+        radius += 0.01f; 
     }   
 }   
 
@@ -206,19 +204,19 @@ __global__ void kernelAdvanceBouncingBalls() {
     if (index >= cuConstRendererParams.numCircles) 
         return; 
 
-    float* velocity = cuConstRendererParams.velocity; 
-    float* position = cuConstRendererParams.position; 
+    CudaRenderer::Circle* circle = cuConstRendererParams.circles;
+    float* velocity = cuConstRendererParams.velocity;
 
     int index3 = 3 * index;
     // reverse velocity if center position < 0
     float oldVelocity = velocity[index3+1];
-    float oldPosition = position[index3+1];
+    float oldPosition = circle[index].position[1];
 
     if (oldVelocity == 0.f && oldPosition == 0.f) { // stop-condition 
         return;
     }
 
-    if (position[index3+1] < 0 && oldVelocity < 0.f) { // bounce ball 
+    if (circle[index].position[1] < 0 && oldVelocity < 0.f) { // bounce ball 
         velocity[index3+1] *= kDragCoeff;
     }
 
@@ -226,13 +224,13 @@ __global__ void kernelAdvanceBouncingBalls() {
     velocity[index3+1] += kGravity * dt;
 
     // update positions (only along y-axis)
-    position[index3+1] += velocity[index3+1] * dt;
+    circle[index].position[1] += velocity[index3+1] * dt;
 
     if (fabsf(velocity[index3+1] - oldVelocity) < epsilon
         && oldPosition < 0.0f
-        && fabsf(position[index3+1]-oldPosition) < epsilon) { // stop ball 
+        && fabsf(circle[index].position[1] -oldPosition) < epsilon) { // stop ball 
         velocity[index3+1] = 0.f;
-        position[index3+1] = 0.f;
+        circle[index].position[1] = 0.f;
     }
 }
 
@@ -254,7 +252,7 @@ __global__ void kernelAdvanceSnowflake() {
 
     int index3 = 3 * index;
 
-    float* positionPtr = &cuConstRendererParams.position[index3];
+    float* positionPtr = cuConstRendererParams.circles[index].position;
     float* velocityPtr = &cuConstRendererParams.velocity[index3];
 
     // loads from global memory
@@ -287,7 +285,7 @@ __global__ void kernelAdvanceSnowflake() {
     velocity.x += forceScaling * (noiseForce.x + dragForce.y) * dt;
     velocity.y += forceScaling * (kGravity + noiseForce.y + dragForce.y) * dt;
 
-    float radius = cuConstRendererParams.radius[index];
+    float radius = cuConstRendererParams.circles[index].radius;
 
     // if the snowflake has moved off the left, right or bottom of
     // the screen, place it back at the top and give it a
@@ -322,13 +320,13 @@ __global__ void kernelAdvanceSnowflake() {
 // function.  Called by kernelRenderCircles()
 __device__ __inline__ void
 shadePixel(int circleIndex, const float2 pixelCenter, float4* imagePtr) {
-    const float3 p = *(float3*)(&cuConstRendererParams.position[circleIndex * 3]);
+    const float3 p = *(float3*)cuConstRendererParams.circles[circleIndex].position;
 
     float diffX = p.x - pixelCenter.x;
     float diffY = p.y - pixelCenter.y;
     float pixelDist = diffX * diffX + diffY * diffY;
 
-    float rad = cuConstRendererParams.radius[circleIndex];;
+    float rad = cuConstRendererParams.circles[circleIndex].radius;
     float maxDist = rad * rad;
 
     // circle does not contribute to the image
@@ -360,8 +358,7 @@ shadePixel(int circleIndex, const float2 pixelCenter, float4* imagePtr) {
 
     } else {
         // simple: each circle has an assigned color
-        int index3 = 3 * circleIndex;
-        rgb = *(float3*)&(cuConstRendererParams.color[index3]);
+        rgb = *(float3*)cuConstRendererParams.circles[circleIndex].color;
         alpha = .5f;
     }
 
@@ -395,11 +392,9 @@ __global__ void kernelRenderCircles() {
     if (index >= cuConstRendererParams.numCircles)
         return;
 
-    int index3 = 3 * index;
-
     // read position and radius
-    float3 p = *(float3*)(&cuConstRendererParams.position[index3]);
-    float  rad = cuConstRendererParams.radius[index];
+    const float3 p   = *(float3*)cuConstRendererParams.circles[index].position;
+    const float  rad = cuConstRendererParams.circles[index].radius;
 
     // compute the bounding box of the circle. The bound is in integer
     // screen coordinates, so it's clamped to the edges of the screen.
@@ -435,41 +430,15 @@ __global__ void kernelRenderCircles() {
 
 
 CudaRenderer::CudaRenderer() {
-    image = NULL;
-
-    numCircles = 0;
-    position = NULL;
-    velocity = NULL;
-    color = NULL;
-    radius = NULL;
-
-    cudaDevicePosition = NULL;
-    cudaDeviceVelocity = NULL;
-    cudaDeviceColor = NULL;
-    cudaDeviceRadius = NULL;
-    cudaDeviceImageData = NULL;
 }
 
 CudaRenderer::~CudaRenderer() {
 
-    if (image) {
-        delete image;
-    }
+    delete image;
+    delete [] velocity;
 
-    if (position) {
-        delete [] position;
-        delete [] velocity;
-        delete [] color;
-        delete [] radius;
-    }
-
-    if (cudaDevicePosition) {
-        cudaFree(cudaDevicePosition);
-        cudaFree(cudaDeviceVelocity);
-        cudaFree(cudaDeviceColor);
-        cudaFree(cudaDeviceRadius);
-        cudaFree(cudaDeviceImageData);
-    }
+    cudaFree(cudaDeviceVelocity);
+    cudaFree(cudaDeviceImageData);
 }
 
 const Image*
@@ -491,7 +460,30 @@ CudaRenderer::getImage() {
 void
 CudaRenderer::loadScene(SceneName scene) {
     sceneName = scene;
+
+    float* position = nullptr;
+    float* color = nullptr;
+    float* radius = nullptr;
     loadCircleScene(sceneName, numCircles, position, velocity, color, radius);
+
+    circles_.clear();
+    circles_.resize(numCircles + BLOCKSIZE); // Make sure there's a safety buffer for circle loop to overshoot.
+
+    for (int c = 0; c < numCircles; ++c) {
+      circles_[c].color[0] = color[0+3*c];
+      circles_[c].color[1] = color[1+3*c];
+      circles_[c].color[2] = color[2+3*c];
+
+      circles_[c].position[0] = position[0 + 3 * c];
+      circles_[c].position[1] = position[1 + 3 * c];
+      circles_[c].position[2] = position[2 + 3 * c];
+
+      circles_[c].radius = radius[c];
+    }
+
+    delete [] position;
+    delete [] color;
+    delete [] radius;
 }
 
 void
@@ -524,22 +516,13 @@ CudaRenderer::setup() {
     // See the CUDA Programmer's Guide for descriptions of
     // cudaMalloc and cudaMemcpy
 
-    const int numCirclesAlloced = numCircles + BLOCKSIZE; // Make sure there's a safety buffer for circle loop to overshoot.
-    cudaMalloc(&cudaDevicePosition, sizeof(float) * 3 * numCirclesAlloced);
-    cudaMalloc(&cudaDeviceVelocity, sizeof(float) * 3 * numCirclesAlloced);
-    cudaMalloc(&cudaDeviceColor, sizeof(float) * 3 * numCirclesAlloced);
-    cudaMalloc(&cudaDeviceRadius, sizeof(float) * numCirclesAlloced);
+    cudaMalloc(&cudaCircles, sizeof(Circle) * circles_.size());
+    cudaMalloc(&cudaDeviceVelocity, sizeof(float) * 3 * numCircles);
+
     cudaMalloc(&cudaDeviceImageData, sizeof(float) * 4 * image->width * image->height);
 
-    cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
+    cudaMemcpy(cudaCircles, circles_.data(), sizeof(cudaCircles[0]) * circles_.size(), cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
-    cudaMemcpy(cudaDeviceColor, color, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
-    cudaMemcpy(cudaDeviceRadius, radius, sizeof(float) * numCircles, cudaMemcpyHostToDevice);
-
-    // Clear the overshoot zones to prevent any stray drawing
-    cudaMemset(cudaDevicePosition + 3*numCircles, 0, 3*sizeof(cudaDeviceRadius[0])*(numCirclesAlloced - numCircles));
-    cudaMemset(cudaDeviceVelocity + 3*numCircles, 0, 3*sizeof(cudaDeviceRadius[0])*(numCirclesAlloced - numCircles));
-    cudaMemset(cudaDeviceRadius   + 1*numCircles, 0, 1*sizeof(cudaDeviceRadius[0])*(numCirclesAlloced - numCircles));
 
     // Initialize parameters in constant memory.  We didn't talk about
     // constant memory in class, but the use of read-only constant
@@ -554,10 +537,8 @@ CudaRenderer::setup() {
     params.numCircles = numCircles;
     params.imageWidth = image->width;
     params.imageHeight = image->height;
-    params.position = cudaDevicePosition;
+    params.circles = cudaCircles;
     params.velocity = cudaDeviceVelocity;
-    params.color = cudaDeviceColor;
-    params.radius = cudaDeviceRadius;
     params.imageData = cudaDeviceImageData;
 
     cudaMemcpyToSymbol(cuConstRendererParams, &params, sizeof(GlobalConstants));
@@ -673,11 +654,10 @@ __global__ void kernelRenderPixels() {
   // That's why we advance by one step size less 1.
   for (int step = 0; step < cuConstRendererParams.numCircles; step+=(BLOCKSIZE-1)) {
     {
-      const int circleIndex = step + linearIndex;
-      const float* circleXYZ = &cuConstRendererParams.position[circleIndex * 3];
-      const float rad = cuConstRendererParams.radius[circleIndex];
+      const CudaRenderer::Circle& circle = cuConstRendererParams.circles[step + linearIndex];
+
       intersecting[linearIndex] =
-        circleInBox(circleXYZ[0], circleXYZ[1], rad, boxL, boxR, boxT, boxB);
+        circleInBox(circle.position[0], circle.position[1], circle.radius, boxL, boxR, boxT, boxB);
     } __syncthreads();
 
     {
@@ -685,6 +665,11 @@ __global__ void kernelRenderPixels() {
     } __syncthreads();
 
     const int cRendered = intInd[BLOCKSIZE-1];
+    // if(linearIndex==0) printf("cRendered: %i\n", cRendered);
+    if (0 == cRendered) {
+      continue;
+    }
+
     {
       int idx = intInd[linearIndex];
       if (idx != intInd[linearIndex + 1]) {

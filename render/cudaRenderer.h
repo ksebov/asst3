@@ -1,6 +1,8 @@
 #ifndef __CUDA_RENDERER_H__
 #define __CUDA_RENDERER_H__
 
+#include <vector>
+
 #ifndef uint
 #define uint unsigned int
 #endif
@@ -10,25 +12,7 @@
 
 class CudaRenderer : public CircleRenderer {
 
-private:
-
-    Image* image;
-    SceneName sceneName;
-
-    int numCircles;
-    float* position;
-    float* velocity;
-    float* color;
-    float* radius;
-
-    float* cudaDevicePosition;
-    float* cudaDeviceVelocity;
-    float* cudaDeviceColor;
-    float* cudaDeviceRadius;
-    float* cudaDeviceImageData;
-
 public:
-
     CudaRenderer();
     virtual ~CudaRenderer();
 
@@ -46,11 +30,25 @@ public:
 
     void render();
 
-    void shadePixel(
-        int circleIndex,
-        float pixelCenterX, float pixelCenterY,
-        float px, float py, float pz,
-        float* pixelData);
+    struct Circle {
+      float position[3] = {-1,-1, -1};
+      float radius = 0;
+      float color   [3] = {0,0,0};
+      float _reserved = 0;
+    };
+
+private:
+  Image* image = nullptr;
+  SceneName sceneName;
+
+  int numCircles = 0;
+  std::vector<Circle> circles_;
+  float* velocity = nullptr;
+
+  Circle* cudaCircles = nullptr;
+  float* cudaDeviceVelocity = nullptr;
+
+  float* cudaDeviceImageData = nullptr;
 };
 
 
